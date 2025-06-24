@@ -40,62 +40,79 @@ def create_notion_task(task_text):
             parent={"database_id": NOTION_DATABASE_ID},
             properties={
                 "Name": {
-                    "title": [
-                        {"text": {"content": task_text}}
-                    ]
+                    "title": [{"text": {"content": task_text}}]
                 },
                 "Status": {
-                    "select": {"name": "Pending"}
+                    "status": {"name": "Pending"}
                 }
             }
         )
-        return "Task created successfully in Notion ✅"
+        return "✅ Task created successfully in Notion!"
     except Exception as e:
-        return f"Failed to create task: {str(e)}"
+        logging.error(f"Failed to create task: {e}")
+        return f"❌ Failed to create task: {str(e)}"
 
 # Notion Task Listing
 def list_notion_tasks():
     try:
         result = notion.databases.query(
-            **{
-                "database_id": NOTION_DATABASE_ID,
-                "filter": {
-                    "property": "Status",
-                    "select": {"equals": "Pending"}
-                }
+            database_id=NOTION_DATABASE_ID,
+            filter={
+                "property": "Status",
+                "status": {"equals": "Pending"}
             }
         )
         tasks = result.get("results", [])
         if not tasks:
-            return "No pending tasks 🚀"
+            return "🎉 No pending tasks. You’re free… for now."
 
         task_list = "\n".join(
             [f"• {task['properties']['Name']['title'][0]['text']['content']}" for task in tasks]
         )
-        return f"📋 Pending Tasks:\n{task_list}"
+        return f"📋 Pending Tasks:\n\n{task_list}"
     except Exception as e:
-        return f"Failed to fetch tasks: {str(e)}"
+        logging.error(f"Failed to fetch tasks: {e}")
+        return f"❌ Failed to fetch tasks: {str(e)}"
 
+# Command: /start
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     chat_id = message.chat.id
     active_chats.add(chat_id)
     bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
 
+# Command: /settask
 @bot.message_handler(commands=["settask"])
 def set_task(message):
     task_text = message.text.replace("/settask", "").strip()
     if not task_text:
-        bot.reply_to(message, "Give me the task text after /settask 📝")
+        bot.reply_to(message, "📝 Send the task text right after /settask")
         return
     reply = create_notion_task(task_text)
     bot.reply_to(message, reply)
 
+# Command: /gettasks
 @bot.message_handler(commands=["gettasks"])
 def get_tasks(message):
     reply = list_notion_tasks()
     bot.reply_to(message, reply)
 
+# Command: /help
+@bot.message_handler(commands=["help"])
+def show_help(message):
+    help_text = """
+🛠️ *Astra Bot Commands:*
+
+/start - Activate Astra for this chat
+/settask [task] - Add a new task to your Notion DB
+/gettasks - List all *Pending* tasks from Notion
+/help - Show this help message
+
+💬 Or just type anything and I'll reply sarcastically.
+"""
+    bot.reply_to(message, help_text, parse_mode="Markdown")
+
+# General message handler
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
@@ -108,6 +125,7 @@ def handle_message(message):
     response = get_sarcastic_reply(user_message)
     bot.reply_to(message, response)
 
+# Productivity check every 1 hour (when invoked externally via cron/scheduler)
 def send_productivity_check():
     logs = load_logs()
     for chat_id in active_chats:
@@ -120,7 +138,7 @@ def send_productivity_check():
                     bot.send_message(chat_id, sarcasm)
             except Exception as e:
                 logging.error(f"Time parsing issue: {e}")
-        check_msg = "Yo, did you do anything productive yet? 👀"
+        check_msg = "👀 Yo, did you do anything productive yet?"
         bot.send_message(chat_id, check_msg)
         logs[str(chat_id)] = {"last_check": str(datetime.now())}
     save_logs(logs)
