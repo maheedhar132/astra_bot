@@ -3,21 +3,19 @@ import json
 import logging
 from datetime import datetime, timedelta
 from sarcasm_engine import get_sarcastic_reply, generate_sarcasm
-from notion_client import Client
+import notion_engine
 
 # Load config
 with open("config.json") as f:
     config = json.load(f)
 
 BOT_TOKEN = config["bot_token"]
-NOTION_TOKEN = config["notion_token"]
-NOTION_DATABASE_ID = config["notion_database_id"]
 
 bot = telebot.TeleBot(BOT_TOKEN)
-notion = Client(auth=NOTION_TOKEN)
-
 LOG_FILE = "astra_log.json"
 active_chats = set()
+
+user_emails = {}
 
 def load_logs():
     try:
@@ -33,93 +31,74 @@ def save_logs(logs):
     except Exception as e:
         logging.error(f"Failed to save logs: {e}")
 
-# Notion Task Creation (with due date)
-def create_notion_task(task_text, due_date):
-    try:
-        notion.pages.create(
-            parent={"database_id": NOTION_DATABASE_ID},
-            properties={
-                "Task name": {
-                    "title": [{"text": {"content": task_text}}]
-                },
-                "Status": {
-                    "status": {"name": "Not started"}
-                },
-                "Due date": {
-                    "date": {"start": due_date}
-                }
-            }
-        )
-        return "✅ Task created successfully in Notion!"
-    except Exception as e:
-        return f"❌ Failed to create task: {str(e)}"
-
-# Notion Task Listing (Not started)
-def list_notion_tasks():
-    try:
-        result = notion.databases.query(
-            **{
-                "database_id": NOTION_DATABASE_ID,
-                "filter": {
-                    "property": "Status",
-                    "status": {"equals": "Not started"}
-                }
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
-            return "No pending tasks 🚀"
-
-        task_list = "\n".join(
-            [f"• {task['properties']['Task name']['title'][0]['text']['content']}" for task in tasks]
-        )
-        return f"📋 Pending Tasks:\n{task_list}"
-    except Exception as e:
-        return f"Failed to fetch tasks: {str(e)}"
-
-# Commands
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     chat_id = message.chat.id
     active_chats.add(chat_id)
-    bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
+    bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type /help for commands.")
+
+@bot.message_handler(commands=["help"])
+def show_help(message):
+    help_text = """
+📌 Available Commands:
+/start — Activate Astra
+/set_email your@email.com — Set your Notion email
+/settask Task text | MM/DD/YYYY — Create a new task
+/gettasks — List your tasks
+/task_details Task Name — Get full details
+/update_task Task Name | Field | New Value — Update a task field
+/help — Show this help message
+"""
+    bot.reply_to(message, help_text)
+
+@bot.message_handler(commands=["set_email"])
+def set_email(message):
+    email = message.text.replace("/set_email", "").strip()
+    if not email:
+        bot.reply_to(message, "Please provide your email.")
+        return
+    user_emails[message.chat.id] = email
+    bot.reply_to(message, f"✅ Email set as {email}.")
 
 @bot.message_handler(commands=["settask"])
 def set_task(message):
-    task_text = message.text.replace("/settask", "").strip()
-    if not task_text:
-        bot.reply_to(message, "❗Give me the task text after /settask 📝")
+    if message.chat.id not in user_emails:
+        bot.reply_to(message, "Set your email first with /set_email.")
         return
-    bot.reply_to(message, "Please enter a due date in MM/DD/YYYY format:")
-
-    # Set up a one-time next message handler for due date
-    @bot.message_handler(func=lambda m: True)
-    def get_due_date(m):
-        try:
-            due_date = datetime.strptime(m.text.strip(), "%m/%d/%Y").strftime("%Y-%m-%d")
-            reply = create_notion_task(task_text, due_date)
-            bot.reply_to(m, reply)
-            bot.message_handler(func=lambda x: True)(handle_message)  # restore default handler
-        except ValueError:
-            bot.reply_to(m, "Invalid date format! Please use MM/DD/YYYY.")
+    parts = message.text.replace("/settask", "").strip().split("|")
+    if len(parts) != 2:
+        bot.reply_to(message, "Use format: /settask Task text | MM/DD/YYYY")
+        return
+    task_text, due_date = parts
+    reply = notion_engine.create_task(task_text.strip(), due_date.strip(), user_emails[message.chat.id])
+    bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["gettasks"])
 def get_tasks(message):
-    reply = list_notion_tasks()
+    if message.chat.id not in user_emails:
+        bot.reply_to(message, "Set your email first with /set_email.")
+        return
+    reply = notion_engine.get_tasks_for_assignee(user_emails[message.chat.id])
     bot.reply_to(message, reply)
 
-@bot.message_handler(commands=["help"])
-def help_command(message):
-    help_text = """
-🛠️ *Astra Bot Commands*:
-/start — Start Astra and activate session
-/settask <task description> — Add a new task (will prompt for due date)
-/gettasks — List all 'Not started' tasks from Notion
-/help — Show this help message
+@bot.message_handler(commands=["task_details"])
+def task_details(message):
+    task_name = message.text.replace("/task_details", "").strip()
+    if not task_name:
+        bot.reply_to(message, "Provide the task name.")
+        return
+    reply = notion_engine.get_task_details(task_name)
+    bot.reply_to(message, reply)
 
-Just type anything to get a sarcastic reply too 😎
-"""
-    bot.reply_to(message, help_text, parse_mode='Markdown')
+@bot.message_handler(commands=["update_task"])
+def update_task(message):
+    parts = message.text.replace("/update_task", "").strip().split("|")
+    if len(parts) != 3:
+        bot.reply_to(message, "Use format: /update_task Task name | Field | New Value")
+        return
+    task_name, field, new_value = [p.strip() for p in parts]
+    reply = notion_engine.update_task_field(task_name, field, new_value)
+    bot.reply_to(message, reply)
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -128,7 +107,6 @@ def handle_message(message):
     logs = load_logs()
     logs[str(chat_id)] = {"last_response": str(datetime.now())}
     save_logs(logs)
-
     user_message = message.text
     response = get_sarcastic_reply(user_message)
     bot.reply_to(message, response)
