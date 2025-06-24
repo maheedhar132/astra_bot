@@ -1,105 +1,120 @@
-import logging
-from notion_client import Client
+import requests
+import json
 from datetime import datetime
 
+# Load config
 with open("config.json") as f:
-    import json
     config = json.load(f)
 
-NOTION_TOKEN = config["notion_token"]
-NOTION_DATABASE_ID = config["notion_database_id"]
+NOTION_URL = "https://api.notion.com/v1"
+DATABASE_ID = config["notion_database_id"]
+HEADERS = {
+    "Authorization": f"Bearer {config['notion_token']}",
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28"
+}
 
-notion = Client(auth=NOTION_TOKEN)
-
-def create_task(task_name, due_date, assignee_email):
+def create_task(task_name, due_date, email):
     try:
-        # Convert to ISO 8601 date format
-        iso_date = datetime.strptime(due_date, "%m/%d/%Y").date().isoformat()
-
-        notion.pages.create(
-            parent={"database_id": NOTION_DATABASE_ID},
-            properties={
+        task_payload = {
+            "parent": {"database_id": DATABASE_ID},
+            "properties": {
                 "Task name": {
-                    "title": [{"text": {"content": task_name}}]
-                },
-                "Status": {
-                    "status": {"name": "Not started"}
+                    "title": [
+                        {
+                            "text": {
+                                "content": task_name
+                            }
+                        }
+                    ]
                 },
                 "Due Date": {
-                    "date": {"start": iso_date}
+                    "date": {
+                        "start": datetime.strptime(due_date, "%m/%d/%Y").isoformat()
+                    }
+                },
+                "Status": {
+                    "select": {
+                        "name": "Not started"
+                    }
                 },
                 "Assignee": {
-                    "email": assignee_email
+                    "people": []
                 }
             }
-        )
-        return "✅ Task created successfully in Notion!"
-    except Exception as e:
-        logging.error(f"Task creation error: {e}")
-        return f"❌ Failed to create task: {str(e)}"
+        }
 
-def list_tasks(assignee_email):
+        response = requests.post(f"{NOTION_URL}/pages", headers=HEADERS, json=task_payload)
+        response.raise_for_status()
+        return f"✅ Task '{task_name}' added with due date {due_date}."
+
+    except Exception as e:
+        return f"❌ Failed to add task: {e}"
+
+def list_tasks(email):
     try:
-        result = notion.databases.query(
-            **{
-                "database_id": NOTION_DATABASE_ID,
-                "filter": {
-                    "and": [
-                        {"property": "Status", "status": {"does_not_equal": "Done"}},
-                        {"property": "Assignee", "email": {"equals": assignee_email}}
-                    ]
+        filter_body = {
+            "filter": {
+                "property": "Assignee",
+                "people": {
+                    "contains": email
                 }
             }
-        )
-        tasks = result.get("results", [])
+        }
+        response = requests.post(f"{NOTION_URL}/databases/{DATABASE_ID}/query", headers=HEADERS, json=filter_body)
+        response.raise_for_status()
+        data = response.json()
+        tasks = data.get("results", [])
+
         if not tasks:
-            return "🎉 No active tasks found."
+            return "No tasks found for you. Try adding some, you slacker."
 
-        task_list = ""
+        msg = "📋 Your Tasks:\n"
         for task in tasks:
-            name = task["properties"]["Task name"]["title"][0]["text"]["content"]
-            status = task["properties"]["Status"]["status"]["name"]
-            due_date = task["properties"].get("Due Date", {}).get("date", {}).get("start", "N/A")
-            task_list += f"• {name} | Status: {status} | Due: {due_date}\n"
+            name = task["properties"]["Task name"]["title"][0]["plain_text"]
+            due_date = task["properties"]["Due Date"]["date"]["start"]
+            msg += f"• {name} — Due: {due_date}\n"
 
-        return f"📋 Your Tasks:\n{task_list}"
+        return msg
+
     except Exception as e:
-        logging.error(f"Task listing error: {e}")
-        return f"❌ Failed to fetch tasks: {str(e)}"
+        return f"❌ Failed to fetch tasks: {e}"
 
 def update_task(task_id, property_name, new_value):
     try:
-        prop_update = {}
-        if property_name == "Task name":
-            prop_update["Task name"] = {"title": [{"text": {"content": new_value}}]}
-        elif property_name == "Status":
-            prop_update["Status"] = {"status": {"name": new_value}}
-        elif property_name == "Due Date":
-            iso_date = datetime.strptime(new_value, "%m/%d/%Y").date().isoformat()
-            prop_update["Due Date"] = {"date": {"start": iso_date}}
-        else:
-            return f"❌ Unsupported property: {property_name}"
+        update_payload = {
+            "properties": {
+                property_name: {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": new_value
+                            }
+                        }
+                    ]
+                }
+            }
+        }
 
-        notion.pages.update(page_id=task_id, properties=prop_update)
-        return "✅ Task updated successfully."
+        response = requests.patch(f"{NOTION_URL}/pages/{task_id}", headers=HEADERS, json=update_payload)
+        response.raise_for_status()
+        return f"✅ Task {task_id} updated: {property_name} → {new_value}"
+
     except Exception as e:
-        logging.error(f"Task update error: {e}")
-        return f"❌ Failed to update task: {str(e)}"
+        return f"❌ Failed to update task: {e}"
 
 def get_task_details(task_id):
     try:
-        task = notion.pages.retrieve(task_id)
-        details = {}
-        for key, prop in task["properties"].items():
-            if prop["type"] == "title":
-                details[key] = prop["title"][0]["text"]["content"] if prop["title"] else ""
-            elif prop["type"] == "status":
-                details[key] = prop["status"]["name"]
-            elif prop["type"] == "date":
-                details[key] = prop["date"]["start"] if prop["date"] else "N/A"
-            elif prop["type"] == "email":
-                details[key] = prop["email"]
+        response = requests.get(f"{NOTION_URL}/pages/{task_id}", headers=HEADERS)
+        response.raise_for_status()
+        task = response.json()
+
+        name = task["properties"]["Task name"]["title"][0]["plain_text"]
+        due_date = task["properties"]["Due Date"]["date"]["start"]
+        status = task["properties"]["Status"]["select"]["name"]
+
+        details = f"📌 Task Details:\nName: {name}\nDue Date: {due_date}\nStatus: {status}"
         return details
+
     except Exception as e:
-        logging.error(f"Task detail fetch error: {e}")
-        return f"❌ Failed to fetch details: {str(e)}"
+        return f"❌ Failed to get task details: {e}"
