@@ -2,7 +2,7 @@ import telebot
 import json
 import logging
 from datetime import datetime, timedelta
-from sarcasm_engine import get_sarcastic_reply
+from sarcasm_engine import get_sarcastic_reply, generate_sarcasm
 from notion_client import Client
 
 # Load config
@@ -23,12 +23,15 @@ def load_logs():
     try:
         with open(LOG_FILE, "r") as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 def save_logs(logs):
-    with open(LOG_FILE, "w") as f:
-        json.dump(logs, f)
+    try:
+        with open(LOG_FILE, "w") as f:
+            json.dump(logs, f)
+    except Exception as e:
+        logging.error(f"Failed to save logs: {e}")
 
 # Notion Task Creation
 def create_notion_task(task_text):
@@ -38,17 +41,11 @@ def create_notion_task(task_text):
             properties={
                 "Name": {
                     "title": [
-                        {
-                            "text": {
-                                "content": task_text
-                            }
-                        }
+                        {"text": {"content": task_text}}
                     ]
                 },
                 "Status": {
-                    "select": {
-                        "name": "Pending"
-                    }
+                    "select": {"name": "Pending"}
                 }
             }
         )
@@ -64,9 +61,7 @@ def list_notion_tasks():
                 "database_id": NOTION_DATABASE_ID,
                 "filter": {
                     "property": "Status",
-                    "select": {
-                        "equals": "Pending"
-                    }
+                    "select": {"equals": "Pending"}
                 }
             }
         )
@@ -108,6 +103,7 @@ def handle_message(message):
     logs = load_logs()
     logs[str(chat_id)] = {"last_response": str(datetime.now())}
     save_logs(logs)
+
     user_message = message.text
     response = get_sarcastic_reply(user_message)
     bot.reply_to(message, response)
@@ -117,10 +113,13 @@ def send_productivity_check():
     for chat_id in active_chats:
         last_response_time = logs.get(str(chat_id), {}).get("last_response")
         if last_response_time:
-            last_time = datetime.strptime(last_response_time, "%Y-%m-%d %H:%M:%S.%f")
-            if datetime.now() - last_time > timedelta(hours=1):
-                sarcasm = get_sarcastic_reply("No response for an hour, roast them.")
-                bot.send_message(chat_id, sarcasm)
+            try:
+                last_time = datetime.strptime(last_response_time, "%Y-%m-%d %H:%M:%S.%f")
+                if datetime.now() - last_time > timedelta(hours=1):
+                    sarcasm = generate_sarcasm("no_response")
+                    bot.send_message(chat_id, sarcasm)
+            except Exception as e:
+                logging.error(f"Time parsing issue: {e}")
         check_msg = "Yo, did you do anything productive yet? 👀"
         bot.send_message(chat_id, check_msg)
         logs[str(chat_id)] = {"last_check": str(datetime.now())}
