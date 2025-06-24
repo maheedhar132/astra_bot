@@ -1,7 +1,6 @@
 import requests
 import json
 from datetime import datetime
-from configparser import ConfigParser
 
 # Load config
 with open("config.json") as f:
@@ -17,9 +16,8 @@ HEADERS = {
 }
 
 
-def create_task(task_name, due_date, assignee_email):
+def create_task(task_name, due_date):
     try:
-        # Convert to ISO date format
         due_date_obj = datetime.strptime(due_date, "%m/%d/%Y")
         due_date_iso = due_date_obj.date().isoformat()
 
@@ -28,7 +26,6 @@ def create_task(task_name, due_date, assignee_email):
             "properties": {
                 "Task name": {"title": [{"text": {"content": task_name}}]},
                 "Due date": {"date": {"start": due_date_iso}},
-                "Assignee": {"rich_text": [{"text": {"content": assignee_email}}]},
                 "Status": {"select": {"name": "Not started"}}
             }
         }
@@ -43,22 +40,12 @@ def create_task(task_name, due_date, assignee_email):
         return f"❌ Failed to create task: {e}"
 
 
-def list_tasks(assignee_email):
+def list_tasks():
     try:
         payload = {
             "filter": {
-                "and": [
-                    {
-                        "property": "Assignee",
-                        "rich_text": {
-                            "equals": assignee_email
-                        }
-                    },
-                    {
-                        "property": "Status",
-                        "select": {"does_not_equal": "Done"}
-                    }
-                ]
+                "property": "Status",
+                "select": {"does_not_equal": "Done"}
             },
             "sorts": [{"property": "Due date", "direction": "ascending"}]
         }
@@ -132,7 +119,6 @@ def get_task_details(task_id):
         details = (
             f"📝 {props['Task name']['title'][0]['text']['content']}\n"
             f"📅 {props['Due date'].get('date', {}).get('start', 'No date')}\n"
-            f"👤 {props['Assignee']['rich_text'][0]['text']['content']}\n"
             f"🔖 {props['Status']['select']['name']}"
         )
         return details
