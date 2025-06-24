@@ -1,3 +1,5 @@
 {
-    "bot_token": "7900674989:AAFxsAzne72KTwAMNltZbQj8C4Exed2QWVk"
+    "bot_token": "7900674989:AAFxsAzne72KTwAMNltZbQj8C4Exed2QWVk",
+    "notion_token": "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",
+    "notion_database_id": "21c90ce7cad6809d8453d1224b05f1bc"
 }
