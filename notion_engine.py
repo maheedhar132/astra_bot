@@ -1,62 +1,43 @@
 import requests
 import json
 from datetime import datetime
+from configparser import ConfigParser
 
-# Config constants
-NOTION_TOKEN = "YOUR_NOTION_SECRET"
-DATABASE_ID = "YOUR_DATABASE_ID"
-NOTION_URL = "https://api.notion.com/v1"
+# Load config
+with open("config.json") as f:
+    config = json.load(f)
+
+NOTION_TOKEN = config["notion_token"]
+DATABASE_ID = config["notion_database_id"]
+
 HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
-    "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28"
+    "Notion-Version": "2022-06-28",
+    "Content-Type": "application/json"
 }
-
-# In-memory cache for email -> user_id mapping
-user_email_to_id = {}
-
-def get_user_id_by_email(email):
-    if email in user_email_to_id:
-        return user_email_to_id[email]
-
-    try:
-        response = requests.get(f"{NOTION_URL}/users", headers=HEADERS)
-        response.raise_for_status()
-        users = response.json().get("results", [])
-
-        for user in users:
-            if user["type"] == "person" and user["person"].get("email") == email:
-                user_id = user["id"]
-                user_email_to_id[email] = user_id
-                return user_id
-
-        return None
-
-    except Exception as e:
-        print(f"❌ Error fetching users: {e}")
-        return None
 
 
 def create_task(task_name, due_date, assignee_email):
     try:
-        user_id = get_user_id_by_email(assignee_email)
-        if not user_id:
-            return f"❌ Email not found in Notion users: {assignee_email}"
+        # Convert to ISO date format
+        due_date_obj = datetime.strptime(due_date, "%m/%d/%Y")
+        due_date_iso = due_date_obj.date().isoformat()
 
-        payload = {
+        data = {
             "parent": {"database_id": DATABASE_ID},
             "properties": {
                 "Task name": {"title": [{"text": {"content": task_name}}]},
-                "Status": {"select": {"name": "Not started"}},
-                "Due Date": {"date": {"start": due_date}},
-                "Assignee": {"people": [{"id": user_id}]}
+                "Due date": {"date": {"start": due_date_iso}},
+                "Assignee": {"rich_text": [{"text": {"content": assignee_email}}]},
+                "Status": {"select": {"name": "Not started"}}
             }
         }
 
-        response = requests.post(f"{NOTION_URL}/pages", headers=HEADERS, json=payload)
+        response = requests.post(
+            "https://api.notion.com/v1/pages", headers=HEADERS, json=data
+        )
         response.raise_for_status()
-
-        return f"✅ Task '{task_name}' created for {assignee_email}"
+        return f"✅ Task '{task_name}' created for {due_date}"
 
     except Exception as e:
         return f"❌ Failed to create task: {e}"
@@ -64,41 +45,45 @@ def create_task(task_name, due_date, assignee_email):
 
 def list_tasks(assignee_email):
     try:
-        user_id = get_user_id_by_email(assignee_email)
-        if not user_id:
-            return f"❌ Email not found in Notion users: {assignee_email}"
-
-        filter_body = {
+        payload = {
             "filter": {
                 "and": [
                     {
-                        "property": "Status",
-                        "select": {"does_not_equal": "Done"}
+                        "property": "Assignee",
+                        "rich_text": {
+                            "equals": assignee_email
+                        }
                     },
                     {
-                        "property": "Assignee",
-                        "people": {"contains": user_id}
+                        "property": "Status",
+                        "select": {"does_not_equal": "Done"}
                     }
                 ]
-            }
+            },
+            "sorts": [{"property": "Due date", "direction": "ascending"}]
         }
 
-        response = requests.post(f"{NOTION_URL}/databases/{DATABASE_ID}/query", headers=HEADERS, json=filter_body)
+        response = requests.post(
+            f"https://api.notion.com/v1/databases/{DATABASE_ID}/query",
+            headers=HEADERS,
+            json=payload
+        )
         response.raise_for_status()
-        data = response.json()
+        results = response.json().get("results")
 
-        tasks = data.get("results", [])
-        if not tasks:
+        if not results:
             return "📭 No active tasks found."
 
-        msg = "📋 Active Tasks:\n"
-        for task in tasks:
-            name = task["properties"]["Task name"]["title"][0]["plain_text"]
-            due_date = task["properties"]["Due Date"]["date"]["start"]
-            task_id = task["id"]
-            msg += f"• `{task_id}` — {name} (Due: {due_date})\n"
-
-        return msg
+        reply = "📋 Your tasks:\n"
+        for page in results:
+            props = page["properties"]
+            reply += (
+                f"\n🆔 {page['id']}\n"
+                f"📝 {props['Task name']['title'][0]['text']['content']}\n"
+                f"📅 {props['Due date'].get('date', {}).get('start', 'No date')}\n"
+                f"🔖 {props['Status']['select']['name']}\n"
+            )
+        return reply
 
     except Exception as e:
         return f"❌ Failed to fetch tasks: {e}"
@@ -106,18 +91,29 @@ def list_tasks(assignee_email):
 
 def update_task(task_id, prop, value):
     try:
-        payload = {"properties": {}}
         if prop.lower() == "status":
-            payload["properties"]["Status"] = {"select": {"name": value}}
+            prop_data = {"select": {"name": value}}
         elif prop.lower() == "due date":
-            payload["properties"]["Due Date"] = {"date": {"start": value}}
+            due_date_obj = datetime.strptime(value, "%m/%d/%Y")
+            prop_data = {"date": {"start": due_date_obj.date().isoformat()}}
+        elif prop.lower() == "task name":
+            prop_data = {"title": [{"text": {"content": value}}]}
         else:
-            return "❌ Only 'Status' and 'Due Date' can be updated."
+            prop_data = {"rich_text": [{"text": {"content": value}}]}
 
-        response = requests.patch(f"{NOTION_URL}/pages/{task_id}", headers=HEADERS, json=payload)
+        payload = {
+            "properties": {
+                prop: prop_data
+            }
+        }
+
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{task_id}",
+            headers=HEADERS,
+            json=payload
+        )
         response.raise_for_status()
-
-        return f"✅ Task {task_id} updated."
+        return f"✅ Updated {prop} to {value}"
 
     except Exception as e:
         return f"❌ Failed to update task: {e}"
@@ -125,15 +121,21 @@ def update_task(task_id, prop, value):
 
 def get_task_details(task_id):
     try:
-        response = requests.get(f"{NOTION_URL}/pages/{task_id}", headers=HEADERS)
+        response = requests.get(
+            f"https://api.notion.com/v1/pages/{task_id}",
+            headers=HEADERS
+        )
         response.raise_for_status()
-        data = response.json()
+        page = response.json()
+        props = page["properties"]
 
-        task_name = data["properties"]["Task name"]["title"][0]["plain_text"]
-        due_date = data["properties"]["Due Date"]["date"]["start"]
-        status = data["properties"]["Status"]["select"]["name"]
-
-        return f"📖 *Task:* {task_name}\n📅 *Due:* {due_date}\n📌 *Status:* {status}"
+        details = (
+            f"📝 {props['Task name']['title'][0]['text']['content']}\n"
+            f"📅 {props['Due date'].get('date', {}).get('start', 'No date')}\n"
+            f"👤 {props['Assignee']['rich_text'][0]['text']['content']}\n"
+            f"🔖 {props['Status']['select']['name']}"
+        )
+        return details
 
     except Exception as e:
         return f"❌ Failed to fetch task details: {e}"
