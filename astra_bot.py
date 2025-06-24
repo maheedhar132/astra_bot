@@ -1,8 +1,8 @@
 import telebot
 import json
 import logging
-from datetime import datetime, timedelta
-from sarcasm_engine import get_sarcastic_reply, generate_sarcasm
+from datetime import datetime
+from sarcasm_engine import get_sarcastic_reply
 import asyncio
 import notion_engine
 
@@ -14,7 +14,6 @@ BOT_TOKEN = config["bot_token"]
 bot = telebot.TeleBot(BOT_TOKEN)
 
 LOG_FILE = "astra_log.json"
-user_emails = {}
 active_chats = set()
 
 # Create one global event loop for async calls
@@ -41,45 +40,23 @@ def send_welcome(message):
     active_chats.add(chat_id)
     bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
 
-@bot.message_handler(commands=["setemail"])
-def set_email(message):
-    chat_id = message.chat.id
-    email = message.text.replace("/setemail", "").strip()
-    if not email:
-        bot.reply_to(message, "Send email like: /setemail you@example.com")
-        return
-    user_emails[str(chat_id)] = email
-    bot.reply_to(message, f"✅ Email set as {email}")
-
 @bot.message_handler(commands=["settask"])
 def set_task(message):
-    chat_id = message.chat.id
-    if str(chat_id) not in user_emails:
-        bot.reply_to(message, "Set your email first with /setemail")
-        return
-
     parts = message.text.replace("/settask", "").strip().split("|")
     if len(parts) != 2:
-        bot.reply_to(message, "Usage: /settask task name | MM/DD/YYYY")
+        bot.reply_to(message, "Usage: /settask Task name | MM/DD/YYYY")
         return
     task_name, due_date = parts
-    email = user_emails[str(chat_id)]
-    reply = notion_engine.create_task(task_name.strip(), due_date.strip(), email)
+    reply = notion_engine.create_task(task_name.strip(), due_date.strip())
     bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["gettasks"])
 def get_tasks(message):
-    chat_id = message.chat.id
-    if str(chat_id) not in user_emails:
-        bot.reply_to(message, "Set your email first with /setemail")
-        return
-    email = user_emails[str(chat_id)]
-    reply = notion_engine.list_tasks(email)
+    reply = notion_engine.list_tasks()
     bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["updatetask"])
 def update_task(message):
-    chat_id = message.chat.id
     parts = message.text.replace("/updatetask", "").strip().split("|")
     if len(parts) != 3:
         bot.reply_to(message, "Usage: /updatetask task_id | property | new_value")
@@ -102,9 +79,8 @@ def show_help(message):
     help_msg = (
         "📖 Available Commands:\n"
         "/start — Start the bot\n"
-        "/setemail your@email.com — Set your assignee email\n"
         "/settask Task name | MM/DD/YYYY — Create a new task\n"
-        "/gettasks — List your active tasks\n"
+        "/gettasks — List all active tasks\n"
         "/updatetask task_id | property | new_value — Update a task\n"
         "/taskdetails task_id — Get task details\n"
         "/help — Show this help message"
@@ -122,7 +98,6 @@ def handle_message(message):
     user_message = message.text
 
     try:
-        # Run sarcasm engine reply in global event loop
         response = loop.run_until_complete(get_sarcastic_reply(user_message))
         bot.reply_to(message, response)
     except Exception as e:
