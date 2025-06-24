@@ -17,6 +17,10 @@ LOG_FILE = "astra_log.json"
 user_emails = {}
 active_chats = set()
 
+# Create one global event loop for async calls
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 def load_logs():
     try:
         with open(LOG_FILE, "r") as f:
@@ -117,13 +121,12 @@ def handle_message(message):
 
     user_message = message.text
 
-    async def get_reply():
-        return await get_sarcastic_reply(user_message)
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    response = loop.run_until_complete(get_reply())
-    bot.reply_to(message, response)
+    try:
+        # Run sarcasm engine reply in global event loop
+        response = loop.run_until_complete(get_sarcastic_reply(user_message))
+        bot.reply_to(message, response)
+    except Exception as e:
+        bot.reply_to(message, f"🤖 Error: {e}")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
