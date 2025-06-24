@@ -15,11 +15,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-
 def create_task(task_name, due_date):
     try:
-        due_date_obj = datetime.strptime(due_date, "%m/%d/%Y")
-        due_date_iso = due_date_obj.date().isoformat()
+        # Convert MM/DD/YYYY to ISO date
+        due_date_iso = datetime.strptime(due_date, "%m/%d/%Y").date().isoformat()
 
         data = {
             "parent": {"database_id": DATABASE_ID},
@@ -30,98 +29,83 @@ def create_task(task_name, due_date):
             }
         }
 
-        response = requests.post(
-            "https://api.notion.com/v1/pages", headers=HEADERS, json=data
-        )
-        response.raise_for_status()
-        return f"✅ Task '{task_name}' created for {due_date}"
-
+        resp = requests.post("https://api.notion.com/v1/pages", headers=HEADERS, json=data)
+        resp.raise_for_status()
+        return f"✅ Task '{task_name}' scheduled for {due_date}"
     except Exception as e:
         return f"❌ Failed to create task: {e}"
-
 
 def list_tasks():
     try:
         payload = {
+            "sorts": [{"property": "Due date", "direction": "ascending"}],
             "filter": {
                 "property": "Status",
                 "select": {"does_not_equal": "Done"}
-            },
-            "sorts": [{"property": "Due date", "direction": "ascending"}]
+            }
         }
 
-        response = requests.post(
+        resp = requests.post(
             f"https://api.notion.com/v1/databases/{DATABASE_ID}/query",
             headers=HEADERS,
             json=payload
         )
-        response.raise_for_status()
-        results = response.json().get("results")
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
 
         if not results:
-            return "📭 No active tasks found."
+            return "📝 No active tasks found."
 
-        reply = "📋 Your tasks:\n"
+        msg = "📋 Your tasks:\n"
         for page in results:
+            pid = page["id"]
             props = page["properties"]
-            reply += (
-                f"\n🆔 {page['id']}\n"
-                f"📝 {props['Task name']['title'][0]['text']['content']}\n"
-                f"📅 {props['Due date'].get('date', {}).get('start', 'No date')}\n"
-                f"🔖 {props['Status']['select']['name']}\n"
-            )
-        return reply
-
-    except Exception as e:
+            name = props["Task name"]["title"][0]["plain_text"]
+            due = props["Due date"]["date"]["start"]
+            status = props["Status"]["select"]["name"]
+            msg += f"- 🔹 {name} (Due: {due}, Status: {status}) [ID: {pid}]\n"
+        return msg
+    except requests.exceptions.RequestException as e:
         return f"❌ Failed to fetch tasks: {e}"
-
+    except Exception as e:
+        return f"❌ Failed during tasks handling: {e}"
 
 def update_task(task_id, prop, value):
     try:
-        if prop.lower() == "status":
-            prop_data = {"select": {"name": value}}
-        elif prop.lower() == "due date":
-            due_date_obj = datetime.strptime(value, "%m/%d/%Y")
-            prop_data = {"date": {"start": due_date_obj.date().isoformat()}}
-        elif prop.lower() == "task name":
-            prop_data = {"title": [{"text": {"content": value}}]}
+        prop_lower = prop.lower()
+        if prop_lower == "status":
+            prop_val = {"select": {"name": value}}
+        elif prop_lower == "due date":
+            iso_date = datetime.strptime(value, "%m/%d/%Y").date().isoformat()
+            prop_val = {"date": {"start": iso_date}}
+        elif prop_lower == "task name":
+            prop_val = {"title": [{"text": {"content": value}}]}
         else:
-            prop_data = {"rich_text": [{"text": {"content": value}}]}
+            prop_val = {"rich_text": [{"text": {"content": value}}]}
 
-        payload = {
-            "properties": {
-                prop: prop_data
-            }
-        }
+        payload = {"properties": {prop: prop_val}}
 
-        response = requests.patch(
+        resp = requests.patch(
             f"https://api.notion.com/v1/pages/{task_id}",
             headers=HEADERS,
             json=payload
         )
-        response.raise_for_status()
-        return f"✅ Updated {prop} to {value}"
-
+        resp.raise_for_status()
+        return f"✅ Updated '{prop}' to '{value}' for task {task_id}"
     except Exception as e:
         return f"❌ Failed to update task: {e}"
 
-
 def get_task_details(task_id):
     try:
-        response = requests.get(
-            f"https://api.notion.com/v1/pages/{task_id}",
-            headers=HEADERS
-        )
-        response.raise_for_status()
-        page = response.json()
+        resp = requests.get(f"https://api.notion.com/v1/pages/{task_id}", headers=HEADERS)
+        resp.raise_for_status()
+        page = resp.json()
         props = page["properties"]
 
-        details = (
-            f"📝 {props['Task name']['title'][0]['text']['content']}\n"
-            f"📅 {props['Due date'].get('date', {}).get('start', 'No date')}\n"
-            f"🔖 {props['Status']['select']['name']}"
-        )
-        return details
+        name = props["Task name"]["title"][0]["plain_text"]
+        due = props["Due date"]["date"]["start"]
+        status = props["Status"]["select"]["name"]
 
+        return f"📝 {name}\n📅 Due: {due}\n🔖 Status: {status}"
     except Exception as e:
         return f"❌ Failed to fetch task details: {e}"
