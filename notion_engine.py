@@ -20,7 +20,7 @@ def create_task(task_name, due_date):
             properties={
                 "Task name": {"title": [{"text": {"content": task_name}}]},
                 "Status": {"status": {"name": "Not started"}},
-                "Due Date": {"date": {"start": iso_date}}
+                "Due Date": {"date": {"start": iso_date}},
             }
         )
         return "✅ Task created successfully in Notion!"
@@ -32,10 +32,7 @@ def list_tasks():
     try:
         result = notion.databases.query(
             database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Status",
-                "status": {"does_not_equal": "Done"}
-            }
+            filter={"property": "Status", "status": {"does_not_equal": "Done"}}
         )
         tasks = result.get("results", [])
         if not tasks:
@@ -43,10 +40,10 @@ def list_tasks():
 
         task_list = ""
         for task in tasks:
-            properties = task["properties"]
-            name = properties["Task name"]["title"][0]["text"]["content"] if properties["Task name"]["title"] else "Untitled"
-            status = properties["Status"]["status"]["name"]
-            due_date = properties.get("Due Date", {}).get("date", {}).get("start", "N/A")
+            props = task["properties"]
+            name = props["Task name"]["title"][0]["text"]["content"]
+            status = props["Status"]["status"]["name"]
+            due_date = props.get("Due Date", {}).get("date", {}).get("start", "N/A")
             task_list += f"• {name} | Status: {status} | Due: {due_date}\n"
 
         return f"📋 Active Tasks:\n{task_list}"
@@ -55,20 +52,21 @@ def list_tasks():
         logging.error(f"Task listing error: {e}")
         return f"❌ Failed to fetch tasks: {str(e)}"
 
-def update_task_by_name(task_name, property_name, new_value):
+def get_task_page_by_name(task_name):
+    result = notion.databases.query(
+        database_id=NOTION_DATABASE_ID,
+        filter={"property": "Task name", "title": {"equals": task_name}}
+    )
+    tasks = result.get("results", [])
+    return tasks[0] if tasks else None
+
+def update_task(task_name, property_name, new_value):
     try:
-        result = notion.databases.query(
-            database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Task name",
-                "title": {"equals": task_name}
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
+        task_page = get_task_page_by_name(task_name)
+        if not task_page:
             return f"❌ Task '{task_name}' not found."
 
-        page_id = tasks[0]["id"]
+        task_id = task_page["id"]
         prop_update = {}
 
         if property_name == "Task name":
@@ -78,43 +76,39 @@ def update_task_by_name(task_name, property_name, new_value):
         elif property_name == "Due Date":
             iso_date = datetime.strptime(new_value, "%m/%d/%Y").date().isoformat()
             prop_update["Due Date"] = {"date": {"start": iso_date}}
+        elif property_name == "Description":
+            prop_update["Description"] = {"rich_text": [{"text": {"content": new_value}}]}
+        elif property_name == "Priority":
+            prop_update["Priority"] = {"select": {"name": new_value}}
+        elif property_name == "Task Type":
+            prop_update["Task Type"] = {"select": {"name": new_value}}
         else:
             return f"❌ Unsupported property: {property_name}"
 
-        notion.pages.update(page_id=page_id, properties=prop_update)
+        notion.pages.update(page_id=task_id, properties=prop_update)
         return "✅ Task updated successfully."
 
     except Exception as e:
         logging.error(f"Task update error: {e}")
         return f"❌ Failed to update task: {str(e)}"
 
-def get_task_details_by_name(task_name):
+def get_task_details(task_name):
     try:
-        result = notion.databases.query(
-            database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Task name",
-                "title": {"equals": task_name}
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
+        task_page = get_task_page_by_name(task_name)
+        if not task_page:
             return f"❌ Task '{task_name}' not found."
 
-        properties = tasks[0]["properties"]
-        details = {}
+        props = task_page["properties"]
+        details = {
+            "Task name": props["Task name"]["title"][0]["text"]["content"],
+            "Status": props["Status"]["status"]["name"],
+            "Due Date": props.get("Due Date", {}).get("date", {}).get("start", "N/A"),
+            "Description": props.get("Description", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "N/A"),
+            "Priority": props.get("Priority", {}).get("select", {}).get("name", "N/A"),
+            "Task Type": props.get("Task Type", {}).get("select", {}).get("name", "N/A"),
+        }
 
-        for key, prop in properties.items():
-            if prop["type"] == "title":
-                details[key] = prop["title"][0]["text"]["content"] if prop["title"] else ""
-            elif prop["type"] == "status":
-                details[key] = prop["status"]["name"]
-            elif prop["type"] == "date":
-                details[key] = prop["date"]["start"] if prop["date"] else "N/A"
-            else:
-                details[key] = "N/A"
-
-        return details
+        return json.dumps(details, indent=2)
 
     except Exception as e:
         logging.error(f"Task detail fetch error: {e}")

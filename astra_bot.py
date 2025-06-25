@@ -6,7 +6,6 @@ from sarcasm_engine import get_sarcastic_reply
 import asyncio
 import notion_engine
 
-# Load config
 with open("config.json") as f:
     config = json.load(f)
 
@@ -16,7 +15,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 LOG_FILE = "astra_log.json"
 active_chats = set()
 
-# Create global event loop for async calls
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -34,7 +32,6 @@ def save_logs(logs):
     except Exception as e:
         logging.error(f"Failed to save logs: {e}")
 
-# Handlers
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     chat_id = message.chat.id
@@ -60,8 +57,8 @@ def set_task(message):
     if len(parts) != 2:
         bot.reply_to(message, "Usage: /settask Task name | MM/DD/YYYY")
         return
-    task_name, due_date = [x.strip() for x in parts]
-    reply = notion_engine.create_task(task_name, due_date)
+    task_name, due_date = parts
+    reply = notion_engine.create_task(task_name.strip(), due_date.strip())
     bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["gettasks"])
@@ -86,9 +83,8 @@ def task_details(message):
         bot.reply_to(message, "Usage: /taskdetails Task name")
         return
     reply = notion_engine.get_task_details(task_name)
-    bot.reply_to(message, str(reply))
+    bot.reply_to(message, reply)
 
-# Sarcasm AI replies for regular messages
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
@@ -98,7 +94,6 @@ def handle_message(message):
     save_logs(logs)
 
     user_message = message.text
-
     try:
         response = loop.run_until_complete(get_sarcastic_reply(user_message))
         bot.reply_to(message, response)
