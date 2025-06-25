@@ -1,136 +1,109 @@
-from notion_client import Client
-from datetime import datetime
-import logging
+import telebot
 import json
+import logging
+from datetime import datetime
+from sarcasm_engine import get_sarcastic_reply
+import asyncio
+import notion_engine
 
+# Load config
 with open("config.json") as f:
     config = json.load(f)
 
-NOTION_TOKEN = config["notion_token"]
-NOTION_DATABASE_ID = config["notion_database_id"]
+BOT_TOKEN = config["bot_token"]
+bot = telebot.TeleBot(BOT_TOKEN)
 
-notion = Client(auth=NOTION_TOKEN)
+LOG_FILE = "astra_log.json"
+active_chats = set()
 
+# Create one global event loop for async calls
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
-def create_task(task_name, due_date):
+def load_logs():
     try:
-        iso_date = datetime.strptime(due_date, "%m/%d/%Y").date().isoformat()
+        with open(LOG_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-        notion.pages.create(
-            parent={"database_id": NOTION_DATABASE_ID},
-            properties={
-                "Task name": {"title": [{"text": {"content": task_name}}]},
-                "Status": {"status": {"name": "Not started"}},
-                "Due Date": {"date": {"start": iso_date}}
-            }
-        )
-        return "✅ Task created successfully in Notion!"
-    except Exception as e:
-        logging.error(f"Task creation error: {e}")
-        return f"❌ Failed to create task: {str(e)}"
-
-
-def list_tasks():
+def save_logs(logs):
     try:
-        result = notion.databases.query(
-            database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Status",
-                "status": {"does_not_equal": "Done"}
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
-            return "🎉 No active tasks found."
-
-        task_list = ""
-        for task in tasks:
-            properties = task["properties"]
-            name = properties["Task name"]["title"][0]["text"]["content"] if properties["Task name"]["title"] else "Untitled"
-            status = properties["Status"]["status"]["name"]
-            due_date = properties.get("Due Date", {}).get("date", {}).get("start", "N/A")
-            task_list += f"• {name} | Status: {status} | Due: {due_date}\n"
-
-        return f"📋 Active Tasks:\n{task_list}"
-
+        with open(LOG_FILE, "w") as f:
+            json.dump(logs, f)
     except Exception as e:
-        logging.error(f"Task listing error: {e}")
-        return f"❌ Failed to fetch tasks: {str(e)}"
+        logging.error(f"Failed to save logs: {e}")
 
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    chat_id = message.chat.id
+    active_chats.add(chat_id)
+    bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
 
-def update_task_by_name(task_name, property_name, new_value):
+@bot.message_handler(commands=["settask"])
+def set_task(message):
+    parts = message.text.replace("/settask", "").strip().split("|")
+    if len(parts) != 2:
+        bot.reply_to(message, "Usage: /settask Task name | MM/DD/YYYY")
+        return
+    task_name, due_date = parts
+    reply = notion_engine.create_task(task_name.strip(), due_date.strip())
+    bot.reply_to(message, reply)
+
+@bot.message_handler(commands=["gettasks"])
+def get_tasks(message):
+    reply = notion_engine.list_tasks()
+    bot.reply_to(message, reply)
+
+@bot.message_handler(commands=["updatetask"])
+def update_task(message):
+    parts = message.text.replace("/updatetask", "").strip().split("|")
+    if len(parts) != 3:
+        bot.reply_to(message, "Usage: /updatetask task name | property | new value")
+        return
+    task_name, prop, value = [x.strip() for x in parts]
+    reply = notion_engine.update_task_by_name(task_name, prop, value)
+    bot.reply_to(message, reply)
+
+@bot.message_handler(commands=["taskdetails"])
+def task_details(message):
+    task_name = message.text.replace("/taskdetails", "").strip()
+    if not task_name:
+        bot.reply_to(message, "Usage: /taskdetails task name")
+        return
+    reply = notion_engine.get_task_details_by_name(task_name)
+    bot.reply_to(message, str(reply))
+
+@bot.message_handler(commands=["help"])
+def show_help(message):
+    help_msg = (
+        "📖 Available Commands:\n"
+        "/start — Start the bot\n"
+        "/settask Task name | MM/DD/YYYY — Create a new task\n"
+        "/gettasks — List all active tasks\n"
+        "/updatetask task name | property | new value — Update a task\n"
+        "/taskdetails task name — Get task details\n"
+        "/help — Show this help message"
+    )
+    bot.reply_to(message, help_msg)
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    chat_id = message.chat.id
+    active_chats.add(chat_id)
+    logs = load_logs()
+    logs[str(chat_id)] = {"last_response": str(datetime.now())}
+    save_logs(logs)
+
+    user_message = message.text
+
     try:
-        result = notion.databases.query(
-            database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Task name",
-                "title": {
-                    "equals": task_name
-                }
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
-            return f"❌ No task found with the name: {task_name}"
-
-        task_id = tasks[0]["id"]
-        prop_update = {}
-
-        if property_name == "Task name":
-            prop_update["Task name"] = {"title": [{"text": {"content": new_value}}]}
-        elif property_name == "Status":
-            prop_update["Status"] = {"status": {"name": new_value}}
-        elif property_name == "Due Date":
-            iso_date = datetime.strptime(new_value, "%m/%d/%Y").date().isoformat()
-            prop_update["Due Date"] = {"date": {"start": iso_date}}
-        else:
-            return f"❌ Unsupported property: {property_name}"
-
-        notion.pages.update(page_id=task_id, properties=prop_update)
-        return "✅ Task updated successfully."
-
+        response = loop.run_until_complete(get_sarcastic_reply(user_message))
+        bot.reply_to(message, response)
     except Exception as e:
-        logging.error(f"Task update error: {e}")
-        return f"❌ Failed to update task: {str(e)}"
+        bot.reply_to(message, f"🤖 Error: {e}")
 
-
-def get_task_details_by_name(task_name):
-    try:
-        result = notion.databases.query(
-            database_id=NOTION_DATABASE_ID,
-            filter={
-                "property": "Task name",
-                "title": {
-                    "equals": task_name
-                }
-            }
-        )
-        tasks = result.get("results", [])
-        if not tasks:
-            return f"❌ No task found with the name: {task_name}"
-
-        properties = tasks[0]["properties"]
-        details = {}
-
-        for key, prop in properties.items():
-            if prop["type"] == "title":
-                details[key] = prop["title"][0]["text"]["content"] if prop["title"] else ""
-            elif prop["type"] == "status":
-                details[key] = prop["status"]["name"]
-            elif prop["type"] == "date":
-                details[key] = prop["date"]["start"] if prop["date"] else "N/A"
-            elif prop["type"] == "rich_text":
-                details[key] = prop["rich_text"][0]["text"]["content"] if prop["rich_text"] else "N/A"
-            elif prop["type"] == "people":
-                people = prop["people"]
-                details[key] = ", ".join([p["name"] for p in people]) if people else "Unassigned"
-            elif prop["type"] == "select":
-                details[key] = prop["select"]["name"] if prop["select"] else "N/A"
-            else:
-                details[key] = "N/A"
-
-        return details
-
-    except Exception as e:
-        logging.error(f"Task detail fetch error: {e}")
-        return f"❌ Failed to fetch details: {str(e)}"
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    print("🚀 Astra is online.")
+    bot.infinity_polling()
