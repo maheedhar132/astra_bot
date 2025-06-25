@@ -2,10 +2,11 @@ import telebot
 import json
 import logging
 from datetime import datetime
-from sarcasm_engine import get_sarcastic_reply
 import asyncio
+from sarcasm_engine import get_sarcastic_reply
 import notion_engine
 
+# Load config
 with open("config.json") as f:
     config = json.load(f)
 
@@ -37,19 +38,6 @@ def send_welcome(message):
     chat_id = message.chat.id
     active_chats.add(chat_id)
     bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
-
-@bot.message_handler(commands=["help"])
-def show_help(message):
-    help_msg = (
-        "📖 Available Commands:\n"
-        "/start — Start the bot\n"
-        "/settask Task name | MM/DD/YYYY — Create a new task\n"
-        "/gettasks — List all active tasks\n"
-        "/updatetask Task name | property | new_value — Update a task\n"
-        "/taskdetails Task name — Get task details\n"
-        "/help — Show this help message"
-    )
-    bot.reply_to(message, help_msg)
 
 @bot.message_handler(commands=["settask"])
 def set_task(message):
@@ -84,6 +72,19 @@ def task_details(message):
         return
     reply = notion_engine.get_task_details(task_name)
     bot.reply_to(message, reply)
+
+@bot.message_handler(commands=["help"])
+def show_help(message):
+    help_msg = (
+        "📖 Available Commands:\n"
+        "/start — Start the bot\n"
+        "/settask Task name | MM/DD/YYYY — Create a new task\n"
+        "/gettasks — List all active tasks\n"
+        "/updatetask Task name | property | new_value — Update a task\n"
+        "/taskdetails Task name — Get task details\n"
+        "/help — Show this help message"
+    )
+    bot.reply_to(message, help_msg)
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
