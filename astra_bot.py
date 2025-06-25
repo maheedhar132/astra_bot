@@ -16,7 +16,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 LOG_FILE = "astra_log.json"
 active_chats = set()
 
-# Create one global event loop for async calls
+# Create global event loop for async calls
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -34,11 +34,25 @@ def save_logs(logs):
     except Exception as e:
         logging.error(f"Failed to save logs: {e}")
 
+# Handlers
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     chat_id = message.chat.id
     active_chats.add(chat_id)
     bot.reply_to(message, f"🚀 Astra online for {message.from_user.first_name}! Type anything…")
+
+@bot.message_handler(commands=["help"])
+def show_help(message):
+    help_msg = (
+        "📖 Available Commands:\n"
+        "/start — Start the bot\n"
+        "/settask Task name | MM/DD/YYYY — Create a new task\n"
+        "/gettasks — List all active tasks\n"
+        "/updatetask Task name | property | new_value — Update a task\n"
+        "/taskdetails Task name — Get task details\n"
+        "/help — Show this help message"
+    )
+    bot.reply_to(message, help_msg)
 
 @bot.message_handler(commands=["settask"])
 def set_task(message):
@@ -46,8 +60,8 @@ def set_task(message):
     if len(parts) != 2:
         bot.reply_to(message, "Usage: /settask Task name | MM/DD/YYYY")
         return
-    task_name, due_date = parts
-    reply = notion_engine.create_task(task_name.strip(), due_date.strip())
+    task_name, due_date = [x.strip() for x in parts]
+    reply = notion_engine.create_task(task_name, due_date)
     bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["gettasks"])
@@ -59,34 +73,22 @@ def get_tasks(message):
 def update_task(message):
     parts = message.text.replace("/updatetask", "").strip().split("|")
     if len(parts) != 3:
-        bot.reply_to(message, "Usage: /updatetask task name | property | new value")
+        bot.reply_to(message, "Usage: /updatetask Task name | property | new_value")
         return
     task_name, prop, value = [x.strip() for x in parts]
-    reply = notion_engine.update_task_by_name(task_name, prop, value)
+    reply = notion_engine.update_task(task_name, prop, value)
     bot.reply_to(message, reply)
 
 @bot.message_handler(commands=["taskdetails"])
 def task_details(message):
     task_name = message.text.replace("/taskdetails", "").strip()
     if not task_name:
-        bot.reply_to(message, "Usage: /taskdetails task name")
+        bot.reply_to(message, "Usage: /taskdetails Task name")
         return
-    reply = notion_engine.get_task_details_by_name(task_name)
+    reply = notion_engine.get_task_details(task_name)
     bot.reply_to(message, str(reply))
 
-@bot.message_handler(commands=["help"])
-def show_help(message):
-    help_msg = (
-        "📖 Available Commands:\n"
-        "/start — Start the bot\n"
-        "/settask Task name | MM/DD/YYYY — Create a new task\n"
-        "/gettasks — List all active tasks\n"
-        "/updatetask task name | property | new value — Update a task\n"
-        "/taskdetails task name — Get task details\n"
-        "/help — Show this help message"
-    )
-    bot.reply_to(message, help_msg)
-
+# Sarcasm AI replies for regular messages
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
